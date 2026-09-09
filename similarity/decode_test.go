@@ -1,7 +1,9 @@
 package similarity
 
 import (
+	"encoding/json"
 	"math"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,6 +17,19 @@ func testdataFile(t *testing.T, name string) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Join(filepath.Dir(file), "..", "testdata", name)
+}
+
+func writePairJSON(t *testing.T, source, target string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "pair.json")
+	buf, err := json.Marshal([]pairFile{{Source: source, Target: target}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestDecodePolylineGoogleSample(t *testing.T) {
@@ -65,123 +80,142 @@ func TestPolylineRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodePointArray(t *testing.T) {
-	geom, err := Decode("{37.0,-122.0;37.1,-122.1}", FormatPointArray)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(geom.Points) != 2 {
-		t.Fatalf("got %d points", len(geom.Points))
-	}
-	if geom.Points[0].Lat != 37.0 || geom.Points[0].Lon != -122.0 {
-		t.Fatalf("first = %v", geom.Points[0])
-	}
-}
-
-func TestDecodeWKT(t *testing.T) {
-	geom, err := Decode("LINESTRING (-122.0 37.0, -122.1 37.1)", FormatAuto)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if geom.Format != FormatWKT {
-		t.Fatalf("format = %s, want wkt", geom.Format)
-	}
-	if len(geom.Points) != 2 || geom.Points[0].Lat != 37.0 || geom.Points[0].Lon != -122.0 {
-		t.Fatalf("points = %v", geom.Points)
-	}
-}
-
-func TestDecodeGeoJSONLineString(t *testing.T) {
-	text := `{"type":"LineString","coordinates":[[-122.0,37.0],[-122.1,37.1]]}`
-	geom, err := Decode(text, FormatAuto)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if geom.Format != FormatGeoJSON {
-		t.Fatalf("format = %s", geom.Format)
-	}
-	if len(geom.Points) != 2 || geom.Points[0].Lat != 37.0 || geom.Points[0].Lon != -122.0 {
-		t.Fatalf("points = %v", geom.Points)
-	}
-}
-
-func TestDecodeGeoJSONFeature(t *testing.T) {
-	text := `{
-		"type":"Feature",
-		"geometry":{"type":"LineString","coordinates":[[-122.0,37.0],[-118.0,34.0]]},
-		"properties":{}
-	}`
-	geom, err := Decode(text, FormatAuto)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(geom.Points) != 2 || geom.Points[1].Lat != 34.0 {
-		t.Fatalf("points = %v", geom.Points)
-	}
-}
-
-func TestDecodeLatLonCSV(t *testing.T) {
-	text := "lat,lon\n37.0,-122.0\n37.1,-122.1\n"
-	geom, err := Decode(text, FormatAuto)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if geom.Format != FormatLatLon {
-		t.Fatalf("format = %s", geom.Format)
-	}
-	if len(geom.Points) != 2 {
-		t.Fatalf("got %d points", len(geom.Points))
+func TestDecodeDetectsPolyline5And6(t *testing.T) {
+	original := Points{{Lat: 37, Lon: -122}, {Lat: 38, Lon: -121}}
+	for _, want := range []Format{FormatPolyline5, FormatPolyline6} {
+		precision := 5
+		if want == FormatPolyline6 {
+			precision = 6
+		}
+		encoded, err := EncodePolyline(original, precision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		geom, err := Decode(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if geom.Format != want {
+			t.Fatalf("detected %s, want %s", geom.Format, want)
+		}
+		if len(geom.Points) != 2 {
+			t.Fatalf("%s: got %d points", want, len(geom.Points))
+		}
+		tol := math.Pow10(-precision)
+		for i := range original {
+			if math.Abs(geom.Points[i].Lat-original[i].Lat) > tol || math.Abs(geom.Points[i].Lon-original[i].Lon) > tol {
+				t.Fatalf("%s point %d = %v, want %v", want, i, geom.Points[i], original[i])
+			}
+		}
 	}
 }
 
 func TestDecodeRejectsSinglePoint(t *testing.T) {
-	_, err := Decode("37.0,-122.0\n", FormatLatLon)
+	encoded, err := EncodePolyline(Points{{Lat: 37, Lon: -122}}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Decode(encoded)
 	if err == nil {
 		t.Fatal("expected error")
 	}
 }
 
-func TestDecodeQuotedPolyline(t *testing.T) {
+func TestLoadFile(t *testing.T) {
 	encoded, err := EncodePolyline(Points{{Lat: 37, Lon: -122}, {Lat: 38, Lon: -121}}, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	geom, err := Decode(`"`+encoded+`"`, FormatPolyline5)
+	pairs, err := LoadFile(writePairJSON(t, encoded, encoded))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(geom.Points) != 2 {
-		t.Fatalf("got %d points", len(geom.Points))
+	if len(pairs) != 1 {
+		t.Fatalf("got %d pairs", len(pairs))
+	}
+	pair := pairs[0]
+	if pair.Source.Format != FormatPolyline5 || pair.Target.Format != FormatPolyline5 {
+		t.Fatalf("formats = %s / %s", pair.Source.Format, pair.Target.Format)
+	}
+	if len(pair.Source.Points) < 2 || len(pair.Target.Points) < 2 {
+		t.Fatalf("got %d / %d points", len(pair.Source.Points), len(pair.Target.Points))
 	}
 }
 
-func TestDetectPolylineDoesNotGuessPrecision6(t *testing.T) {
-	encoded, err := EncodePolyline(Points{{Lat: 37, Lon: -122}, {Lat: 38, Lon: -121}}, 6)
+func TestLoadFileTestdata(t *testing.T) {
+	pairs, err := LoadFile(testdataFile(t, "example.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	detected := detectFormat(encoded)
-	if detected != FormatPolyline5 {
-		t.Fatalf("auto format = %s, want polyline5 (must not guess 6)", detected)
+	if len(pairs) != 2 {
+		t.Fatalf("got %d pairs", len(pairs))
+	}
+	pair := pairs[0]
+	if pair.Source.Format != FormatPolyline5 {
+		t.Fatalf("source format = %s, want polyline5", pair.Source.Format)
+	}
+	if pair.Target.Format != FormatPolyline6 {
+		t.Fatalf("target format = %s, want polyline6", pair.Target.Format)
+	}
+	if len(pair.Source.Points) < 2 || len(pair.Target.Points) < 2 {
+		t.Fatalf("got %d / %d points", len(pair.Source.Points), len(pair.Target.Points))
 	}
 }
 
-func TestLoadFile(t *testing.T) {
-	geom, err := LoadFile(testdataFile(t, "source.geojson"), FormatAuto)
+func TestLoadFileRejectsRawPolyline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raw.txt")
+	if err := os.WriteFile(path, []byte("_p~iF~ps|U_ulLnnqC_mqNvxq`@"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), "json") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLoadFileArray(t *testing.T) {
+	encoded, err := EncodePolyline(Points{{Lat: 37, Lon: -122}, {Lat: 38, Lon: -121}}, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if geom.Format != FormatGeoJSON {
-		t.Fatalf("format = %s", geom.Format)
+	path := filepath.Join(t.TempDir(), "pairs.json")
+	buf, err := json.Marshal([]pairFile{
+		{Source: encoded, Target: encoded},
+		{Source: encoded, Target: encoded},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(geom.Points) < 2 {
-		t.Fatalf("got %d points", len(geom.Points))
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pairs, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 2 {
+		t.Fatalf("got %d pairs", len(pairs))
 	}
 }
 
-func TestUnknownFormat(t *testing.T) {
-	_, err := Decode("LINESTRING (0 0, 1 1)", Format("nope"))
-	if err == nil || !strings.Contains(err.Error(), "unknown format") {
+func TestLoadFileEmptyArray(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.json")
+	if err := os.WriteFile(path, []byte(`[]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), "no pairs") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLoadFileMissingFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.json")
+	if err := os.WriteFile(path, []byte(`[{}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), "missing source") {
 		t.Fatalf("err = %v", err)
 	}
 }

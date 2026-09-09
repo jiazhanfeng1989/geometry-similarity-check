@@ -64,9 +64,9 @@ func Analyze(source, target Geometry) (Report, error) {
 	}
 
 	similar := score.Similar()
-	verdict := "not_used"
+	verdict := "not_similar"
 	if similar {
-		verdict = "used"
+		verdict = "similar"
 	}
 
 	sourceIndex := newSegmentIndex(source.Points)
@@ -163,48 +163,44 @@ func outsideStretches(target Points, source *segmentIndex) []Stretch {
 	return stretches
 }
 
-// Write writes the human-readable report, the same shape as the original pair test log.
+// Write writes a tab-separated report. The first column is a stable key (same names as the
+// JSON fields); remaining columns are values. One record per line, so `awk -F'\t'` can parse it.
 func (r Report) Write(w io.Writer) error {
 	var b strings.Builder
+	fmt.Fprintf(&b, "verdict\t%s\n", r.Verdict)
+	fmt.Fprintf(&b, "coverage\t%.4f\n", r.Coverage)
+	fmt.Fprintf(&b, "coverage_threshold\t%.2f\n", r.CoverageThreshold)
+	fmt.Fprintf(&b, "max_deviation_m\t%.1f\n", r.MaxDeviationM)
+	fmt.Fprintf(&b, "max_deviation_veto_m\t%.0f\n", r.MaxDeviationVetoM)
+	fmt.Fprintf(&b, "corridor_m\t%.0f\n", r.CorridorM)
 	writeLineInfo(&b, r.Source)
 	writeLineInfo(&b, r.Target)
-	fmt.Fprintf(&b, "coverage %.4f (threshold %.2f), max deviation %.1f m (veto above %.0f m) -> %s\n",
-		r.Coverage, r.CoverageThreshold, r.MaxDeviationM, r.MaxDeviationVetoM, r.Verdict)
-
 	if r.WorstTargetFromSource != nil {
-		writeWorst(&b, r.WorstTargetFromSource)
+		writeWorst(&b, "worst_target_from_source", r.WorstTargetFromSource)
 	}
 	if r.WorstSourceFromTarget != nil {
-		writeWorst(&b, r.WorstSourceFromTarget)
+		writeWorst(&b, "worst_source_from_target", r.WorstSourceFromTarget)
 	}
-
-	if len(r.OutsideStretches) == 0 {
-		fmt.Fprintf(&b, "every one of the %d target points lies within the %.0f m corridor, so the two describe the same roads\n",
-			r.Target.Points, r.CorridorM)
-	} else {
-		fmt.Fprintf(&b, "%d stretch(es) of target leave the %.0f m corridor:\n", len(r.OutsideStretches), r.CorridorM)
-		for i, s := range r.OutsideStretches {
-			if i == MaxReportedStretches {
-				fmt.Fprintf(&b, "  ... and %d more\n", len(r.OutsideStretches)-MaxReportedStretches)
-				break
-			}
-			fmt.Fprintf(&b, "  points %d-%d, %.2f-%.2f km along (%.2f km), from %s to %s\n",
-				s.From, s.To, s.FromKM, s.ToKM, s.LengthKM, s.FromCoord, s.ToCoord)
+	fmt.Fprintf(&b, "outside_stretch_count\t%d\n", len(r.OutsideStretches))
+	for i, s := range r.OutsideStretches {
+		if i == MaxReportedStretches {
+			fmt.Fprintf(&b, "outside_stretch_omitted\t%d\n", len(r.OutsideStretches)-MaxReportedStretches)
+			break
 		}
+		fmt.Fprintf(&b, "outside_stretch\t%d\t%d\t%.2f\t%.2f\t%.2f\t%s\t%s\n",
+			s.From, s.To, s.FromKM, s.ToKM, s.LengthKM, s.FromCoord, s.ToCoord)
 	}
-
 	_, err := io.WriteString(w, b.String())
 	return err
 }
 
 func writeLineInfo(b *strings.Builder, info LineInfo) {
-	fmt.Fprintf(b, "%-10s %-10s %d points, %.2f km, %s to %s\n",
+	fmt.Fprintf(b, "%s\t%s\t%d\t%.2f\t%s\t%s\n",
 		info.Role, info.Format, info.Points, info.LengthKM, info.Start, info.End)
 }
 
-func writeWorst(b *strings.Builder, w *WorstPoint) {
-	fmt.Fprintf(b, "worst %-36s %6.1f m at point %d, %.2f km along, %s\n",
-		w.Label, w.DistanceM, w.PointIndex, w.AlongKM, w.Coord)
+func writeWorst(b *strings.Builder, key string, w *WorstPoint) {
+	fmt.Fprintf(b, "%s\t%.1f\t%d\t%.2f\t%s\n", key, w.DistanceM, w.PointIndex, w.AlongKM, w.Coord)
 }
 
 // JSON returns the report as indented JSON.

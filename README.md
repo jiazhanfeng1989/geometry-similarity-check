@@ -1,10 +1,8 @@
 # geometry-similarity-check
 
-Compare two route geometries and report how closely the **target** follows the **source**.
+Compare two Google encoded polylines and report how closely the **target** follows the **source**.
 
-The score is a length-weighted corridor coverage plus a Hausdorff-style deviation veto — the same metric used to decide whether a routing engine followed a client-supplied reference route. This repository is a standalone, dependency-free extraction of that logic: two inputs in, a diagnostic report out.
-
-中文说明见下方 [中文](#中文)。
+The score is a length-weighted corridor coverage plus a Hausdorff-style deviation veto — the same metric used to decide whether a routing engine followed a client-supplied reference route. This repository is a standalone, dependency-free extraction of that logic.
 
 ## Install
 
@@ -19,62 +17,88 @@ Go 1.22 or later. No CGo, no third-party modules.
 ## Usage
 
 ```bash
-gsc [flags] <source> <target>
+gsc -data <pair.json>
 ```
 
-Each argument is a **file path**, a **geometry string**, or `-` for stdin (only one side). If the argument names an existing file, the file is read; otherwise it is treated as the geometry itself.
+One JSON file: an array of pairs. Keys match the report roles (`source` is the reference, `target` is what is being checked):
+
+```json
+[
+  {"source": "<google encoded polyline>", "target": "<google encoded polyline>"}
+]
+```
+
+`encoding/json` unescapes the strings, so a polyline copied out of JSON (where `\` is written `\\`) decodes correctly. Example: [`testdata/example.json`](testdata/example.json).
+
+Only **polyline5** and **polyline6** are supported. Precision is detected from the coordinates: decode as 5 first; if any point falls off the globe (lat outside ±90 or lon outside ±180), retry as 6. A polyline6 decoded as 5 is scaled by ten (49° becomes 490). If both look valid, polyline5 is used. The report header prints the detected format and both endpoints so a mix-up is obvious.
+
+| Flag | Meaning |
+|---|---|
+| `-data` | JSON array of `{source, target}` |
+| `-json` | Print the report as JSON |
+| `-version` | Print version and exit |
 
 ```bash
-# two GeoJSON files (included as examples)
-./gsc testdata/source.geojson testdata/target-close.geojson
-
-# a polyline5 reference against a polyline6 response
-./gsc --source-format polyline5 --target-format polyline6 source.poly target.poly6
-
-# mixed: file + literal point-array
-./gsc testdata/source.geojson '{37.0,-122.0;37.009043,-122.0}'
-
-# machine-readable
-./gsc --json testdata/source.geojson testdata/target-far.geojson
+./gsc -data testdata/example.json
+./gsc -json -data testdata/example.json
 ```
 
-Exit codes: `0` similar (`used`), `1` not similar (`not_used`), `2` usage or decode error.
-
-### Input formats
-
-| Format | `-source-format` / `-target-format` | Coordinate order | Notes |
-|---|---|---|---|
-| Auto (default) | `auto` | — | Tries WKT, GeoJSON, point-array, lat/lon CSV; otherwise polyline **precision 5** |
-| Google polyline 5 | `polyline5` / `polyline` | — | Default for encoded strings |
-| Google polyline 6 | `polyline6` | — | **Never auto-detected.** A polyline6 decoded as 5 is scaled by ten and the same roads look unrelated |
-| Point array | `pointarray` | lat, lon | `{lat1,lon1;lat2,lon2}` |
-| GeoJSON | `geojson` | lon, lat | LineString, MultiLineString, Feature, FeatureCollection |
-| WKT | `wkt` | lon, lat | `LINESTRING (lon lat, ...)` |
-| CSV | `latlon` | lat, lon | One `lat,lon` per line; a header row is optional |
-
-Polyline strings with backslashes are safer in a file than on the shell command line.
+Exit codes: `0` all pairs similar, `1` any pair not similar, `2` usage or decode error. Text output is tab-separated: first column is a stable key (same names as the JSON fields), remaining columns are values. Each pair starts with `pair	i/n`. `-json` prints an array of reports.
 
 ## Sample report
 
 ```
-source     geojson    2 points, 1.01 km, 37.000000,-122.000000 to 37.009043,-122.000000
-target     geojson    2 points, 1.01 km, 37.000000,-121.999887 to 37.009043,-121.999887
-coverage 1.0000 (threshold 0.90), max deviation 10.0 m (veto above 300 m) -> used
-worst target straying from source            10.0 m at point 0, 0.00 km along, 37.000000,-121.999887
-worst source that target skips               10.0 m at point 0, 0.00 km along, 37.000000,-122.000000
-every one of the 2 target points lies within the 30 m corridor, so the two describe the same roads
+pair	1/2
+verdict	similar
+coverage	0.9301
+coverage_threshold	0.90
+max_deviation_m	118.9
+max_deviation_veto_m	300
+corridor_m	30
+source	polyline5	89	3.84	49.056450,2.146330	49.046690,2.099650
+target	polyline6	334	4.21	49.056429,2.146293	49.046676,2.099424
+worst_target_from_source	118.9	319	4.08	49.046680,2.097978
+worst_source_from_target	6.8	79	3.59	49.048550,2.101180
+outside_stretch_count	1
+outside_stretch	310	324	3.90	4.16	0.26	49.046381,2.099829	49.046960,2.099046
+
+pair	2/2
+verdict	not_similar
+coverage	0.4190
+coverage_threshold	0.90
+max_deviation_m	2000.0
+max_deviation_veto_m	300
+corridor_m	30
+source	polyline5	362	34.94	52.603940,4.687350	52.375560,4.769670
+target	polyline6	1440	37.99	52.603942,4.687404	52.375401,4.769405
+worst_target_from_source	2000.0	212	3.09	52.607341,4.716828
+worst_source_from_target	1940.5	100	6.58	52.557310,4.689360
+outside_stretch_count	2
+outside_stretch	5	638	0.11	16.60	16.49	52.604771,4.687619	52.517660,4.717389
+outside_stretch	788	947	20.64	26.00	5.35	52.485211,4.691489	52.440420,4.668640
 ```
 
-The header prints both endpoints so a precision-5 / precision-6 mix-up is obvious before you trust the score. The two "worst" lines are the two directions of the Hausdorff measure: the first catches a detour, the second a route that stops short or only shares a tail. Outside stretches turn a coverage number into somewhere to look on a map.
+Columns after the key:
+
+| Key | Columns |
+|---|---|
+| `pair` | `i/n` (1-based index / pair count) |
+| `source` / `target` | format, points, length_km, start, end |
+| `worst_target_from_source` / `worst_source_from_target` | distance_m, point_index, along_km, coord |
+| `outside_stretch` | from, to, from_km, to_km, length_km, from_coord, to_coord |
+
+`worst_target_from_source` is target → source (a detour). `worst_source_from_target` is source → target (the target missed a stretch of source). Outside stretches turn a coverage number into somewhere to look on a map.
 
 ## How similarity is decided
 
 Two checks, in sequence:
 
-1. **Coverage** — length-weighted share of the *target* that runs within `CorridorMeters` of the source. A length ratio, not a shape distance: one spur would make an identical line look unrelated under Fréchet or Hausdorff alone, and the threshold is a percentage of length.
+1. **Coverage** — length-weighted share of the *target* that runs within `CorridorMeters` of the source. A length ratio, not a shape distance: one spur would make an identical line look unrelated under Fréchet or Hausdorff alone.
 2. **Max deviation** — the worst vertex-to-segment gap between the two geometries, in both directions, saturating at `DeviationCeilingMeters`. A target can score 90% coverage while the remaining 10% takes a long detour; the veto rejects that regardless of coverage.
 
-The pair is **used** when `coverage >= CoverageThreshold` **and** `max deviation <= MaxDeviationMeters`. A threshold of zero switches the check off and reports every pair as similar.
+The pair is **similar** when `coverage >= CoverageThreshold` **and** `max deviation <= MaxDeviationMeters`. A threshold of zero switches the check off and reports every pair as similar.
+
+`Score(target, source)` — coverage is how much of the **target** lies on the **source**. A target that is a subset of the source scores coverage 1.0; the reverse direction of the deviation is what judges a truncated line.
 
 Distances to the polyline are true point-to-segment projections on a local metre plane, not vertex-to-vertex. Encoded polylines place vertices hundreds of metres apart on straight motorways; a point exactly on the line can be far from every vertex.
 
@@ -109,42 +133,23 @@ go build -o gsc ./cmd/gsc
 ```go
 import "github.com/zhfjia/geometry-similarity-check/similarity"
 
-source, _ := similarity.Decode(srcText, similarity.FormatAuto)
-target, _ := similarity.Decode(tgtText, similarity.FormatPolyline6)
-
-report, err := similarity.Analyze(source, target)
-score, err := similarity.Score(target.Points, source.Points)
+pairs, err := similarity.LoadFile("example.json")
+if err != nil {
+    return err
+}
+for _, pair := range pairs {
+    report, err := similarity.Analyze(pair.Source, pair.Target)
+    if err != nil {
+        return err
+    }
+    _ = report
+}
 ```
 
-`Score(target, source)` — coverage is how much of the **target** lies on the **source**. A target that is a subset of the source scores coverage 1.0; the reverse direction of the deviation is what judges a truncated line.
+`LoadFile` reads `[{"source": "...", "target": "..."}, ...]`. `Decode` parses a polyline string and detects polyline5 vs polyline6 the same way.
 
 ## Origin
 
-Extracted from an EV trip planner's reference-route matcher, where a client-supplied Google route is compared against the route a downstream direction service returned. The algorithm is general: any two polylines will do.
+Extracted from an EV trip planner's reference-route matcher, where a client-supplied Google route is compared against the route a downstream direction service returned.
 
 This tool does not include trimming, way-id matching, or the surrounding HTTP service. Those stay in the original product.
-
----
-
-## 中文
-
-比较两条路线几何，判断 **target** 是否足够贴近 **source**。
-
-算法是「走廊覆盖率 + 最大偏离一票否决」：覆盖率是 target 有多少长度落在 source 两侧 `CorridorMeters` 走廊内；最大偏离是双向 Hausdorff（点到线段，不是点到顶点）。两条同时过线才算 `used`。
-
-### 输入
-
-两个 geometry：文件或直接把字符串当参数。支持 Google polyline 5/6、`{lat,lon;...}`、GeoJSON LineString、WKT LINESTRING、逐行 `lat,lon`。`auto` 能识别结构化格式，**不会**猜测 polyline6 —— 编解码精度弄反会把坐标缩放十倍，看起来像完全不同的路，请显式传 `--target-format polyline6`。
-
-### 输出
-
-和原工程 `reportPair` 同一类诊断：两端点（用来核对精度）、覆盖率、最大偏离、两个方向上最差点、以及 target 离开走廊的若干段。
-
-### 阈值
-
-全部在 `similarity/params.go` 里用全局变量写死，并附了完整注释。改阈值需要重新编译，没有运行时 flag。
-
-```bash
-go build -o gsc ./cmd/gsc
-./gsc testdata/source.geojson testdata/target-close.geojson
-```

@@ -2,6 +2,7 @@ package similarity
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -291,15 +292,15 @@ func TestCoverageWithOversizedSegments(t *testing.T) {
 }
 
 func TestAnalyzeUsedPair(t *testing.T) {
-	source := Geometry{Points: straightLine(37.0, -122.0, 100, 20), Format: FormatGeoJSON}
-	target := Geometry{Points: offsetEast(source.Points, 10), Format: FormatGeoJSON}
+	source := Geometry{Points: straightLine(37.0, -122.0, 100, 20), Format: FormatPolyline5}
+	target := Geometry{Points: offsetEast(source.Points, 10), Format: FormatPolyline5}
 
 	report, err := Analyze(source, target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.Similar || report.Verdict != "used" {
-		t.Fatalf("report = %+v, want used", report)
+	if !report.Similar || report.Verdict != "similar" {
+		t.Fatalf("report = %+v, want similar", report)
 	}
 	if len(report.OutsideStretches) != 0 {
 		t.Fatalf("outside stretches = %d, want 0", len(report.OutsideStretches))
@@ -314,10 +315,21 @@ func TestAnalyzeReportsOutsideStretches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Similar || report.Verdict != "not_used" {
-		t.Fatalf("report = %+v, want not_used", report)
+	if report.Similar || report.Verdict != "not_similar" {
+		t.Fatalf("report = %+v, want not_similar", report)
 	}
 	if len(report.OutsideStretches) == 0 {
 		t.Fatal("expected outside stretches")
+	}
+	var buf strings.Builder
+	if err := report.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "verdict\tnot_similar") {
+		t.Fatalf("write:\n%s", out)
+	}
+	if !strings.Contains(out, "outside_stretch\t") {
+		t.Fatalf("write:\n%s", out)
 	}
 }
