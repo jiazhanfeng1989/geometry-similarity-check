@@ -1,0 +1,7 @@
+/gsc
+/geometry-similarity-check
+*.exe
+*.test
+*.out
+.DS_Store
+dist/
