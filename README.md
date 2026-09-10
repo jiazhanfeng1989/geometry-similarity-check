@@ -89,6 +89,26 @@ Columns after the key:
 
 `worst_target_from_source` is target → source (a detour). `worst_source_from_target` is source → target (the target missed a stretch of source). Outside stretches turn a coverage number into somewhere to look on a map.
 
+## Viewing the geometry
+
+Paste the encoded `source` / `target` strings onto a map. Use the precision printed in the report (`polyline5` vs `polyline6`); the wrong one places the line far off the globe.
+
+JSON writes a real `\` as `\\`. `gsc` unescapes that when it reads `-data`. If you copy the string out of the JSON file and paste it into a viewer, unescape it first (or use the checkbox below).
+
+**[Valhalla Polyline Viewer](https://valhalla.github.io/demos/polyline/)** — both precisions; overlay source and target on one map.
+
+1. Check **Polyline6** for a `polyline6` row; leave it unchecked for `polyline5`.
+2. Check **Unescape `\`** if the string came from a JSON file.
+3. Paste one encoded polyline per line, then decode.
+
+**[Google Interactive Polyline Utility](https://developers.google.com/maps/documentation/utilities/polylineutility)** — polyline5 only.
+
+1. Paste into **Encoded Polyline**.
+2. Check **Unescape special characters** if the string came from a JSON file.
+3. Click **Decode Polyline**.
+
+Do not use the Google utility for `polyline6`.
+
 ## How similarity is decided
 
 Two checks, in sequence:
@@ -137,6 +157,7 @@ pairs, err := similarity.LoadFile("example.json")
 if err != nil {
     return err
 }
+
 for _, pair := range pairs {
     report, err := similarity.Analyze(pair.Source, pair.Target)
     if err != nil {
@@ -147,9 +168,3 @@ for _, pair := range pairs {
 ```
 
 `LoadFile` reads `[{"source": "...", "target": "..."}, ...]`. `Decode` parses a polyline string and detects polyline5 vs polyline6 the same way.
-
-## Origin
-
-Extracted from an EV trip planner's reference-route matcher, where a client-supplied Google route is compared against the route a downstream direction service returned.
-
-This tool does not include trimming, way-id matching, or the surrounding HTTP service. Those stay in the original product.
